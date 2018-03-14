@@ -11,6 +11,12 @@ from keras.models import Sequential, load_model
 
 
 ###################################################### To get relative path when built 
+'''
+must check if the application is running as a script or as a frozen exe.
+if script is running as the built executable, must get relative path where the executable is.
+if this is not done, the path will point to the users' home path.
+if running as a normal script, relative path is determined anyway.
+'''
 
 if getattr(sys, 'frozen', False): # when built
     application_path = os.path.dirname(sys.executable)
@@ -22,25 +28,26 @@ elif __file__: # when developing
 
 ###################################################### Variables needed for launcher
 
-IMAGES_DICT = {} # { imageName: [path, owner]} # owner = players/creator/selects
+IMAGES_DICT = {} # { imageName: [path, owner]} # owner = players/creator
 LOGFILEPATH = os.path.join(application_path, "logfile.txt")
 CLASSNAMES = ["burns", "cloud", "mines"]
-FONTBTN="Futura 12 bold"
-FONTLABEL="Futura 12 bold"
 CURSORBTN = "center_ptr"
 
 ############################################################ Variables needed when predicting
 img_width, img_height = 64, 64
-model_path = os.path.join(application_path, 'model.h5')
-model_weights_path = os.path.join(application_path, 'weights.h5')
-model = load_model(model_path)
-model.load_weights(model_weights_path)
 class_to_name = ["clear", "cloudy", "mine", "slash"]
 
 ######################################################################################
-def main(imgPathe):
-
-	imgPath = imgPathe # python predictMulti.py ./players_money/orig.jpg
+def startPredicting(imgPathe):
+	'''
+	param is the path of the image that was copied in the newly created directory by the upload()
+	slices this image and creates a new directory within to copy these 900 slices.
+	each slice is predicted a class using the models. this is done in predict()
+	image in imgPathe param is sliced to 9 images and saved in the image directory.
+	These 9 slices are used for the game.
+	The directory filled with 900 slices is then deleted as this is no longer needed.
+	'''
+	imgPath = imgPathe
 	dirPath = imgPath[:imgPath.rfind('/')+1]
 	IMAGE = imgPath
 	locationSlices = dirPath + 'slices'
@@ -57,8 +64,14 @@ def main(imgPathe):
 			if (f.startswith('.') == False):
 				imgstr.append(locationSlices + '/' + f)
 
+
+	model_path = os.path.join(application_path, 'model.h5')
+	model_weights_path = os.path.join(application_path, 'weights.h5')
+	model = load_model(model_path)
+	model.load_weights(model_weights_path)
+
 	# Getting predictions for all the slices from the model
-	predict(imgstr, class_to_name, dirPath)
+	predict(imgstr, class_to_name, dirPath,model)
 
 	# Finally splitting the input image into 9 slices, with set ratio to be input to game.
 	slice(9, IMAGE, dirPath)
@@ -75,49 +88,50 @@ def main(imgPathe):
 	subprocess.call(["rm","-r",locationSlices]) #cleanup= delete the thousands of slices
 
 def slice(number, IMAGE, location):
-    # slice image for stream and add to the slices folder
-    
-    print("slicing...")
-    tiles = image_slicer.slice(IMAGE, number, save=False)
-    image_slicer.save_tiles(tiles, directory=location, prefix='slice')
+	'''
+	called by startPredicting()
+    slice image to (number param) slices and add to the slices folder (location param)
+    name of each slice is the coordinates of the slice based on the IMAGE
+    '''
+	print("slicing...")
+	tiles = image_slicer.slice(IMAGE, number, save=False)
+	image_slicer.save_tiles(tiles, directory=location, prefix='slice')
 
 
-def predict(imgstr, class_to_name, dirPath):
-    print("predicting...")
-    for image in imgstr:
-        x = load_img(image, target_size=(img_width,img_height))
+def predict(imgstr, class_to_name, dirPath,model):
+	'''
+	param imgstr = list of path of images in the slices folder.
+	Each slice is predicted a class.
+	Creates a textfile for each class that is predicted.
+	coordinates of the slice is appended in the corresponding text file.
+	'''
+	
+	print("predicting...")
+	for image in imgstr:
+		x = load_img(image, target_size=(img_width,img_height))
         
-        x = img_to_array(x)
-        x = np.expand_dims(x, axis=0)
-        x = x/255 # normalise
+		x = img_to_array(x)
+		x = np.expand_dims(x, axis=0)
+		x = x/255 # normalise
         
         
-        predictions = model.predict(x) #predictions in each class
-        pred = np.argmax(predictions[0]) #winner index
+		predictions = model.predict(x) #predictions in each class
+		pred = np.argmax(predictions[0]) #winner index
         
-        if (max(predictions[0]) > 0.5):
-            out1 = class_to_name[pred]
+		if (max(predictions[0]) > 0.5):
+			out1 = class_to_name[pred]
             
-            #write coordinates to log files to help out with input to game
-            f = open(dirPath+out1+".txt", "a")
-            f.write(image[image.rfind('/')+7:-4].replace("_", ",") + "_")
-            f.close()
-
-
-######################################################################################
-def launchGame():
-
-	gamePath = os.path.join(application_path, "GameMac.app")
-	subprocess.call(["open", gamePath])
-	root.destroy()
+			#write coordinates to log files to help out with input to game
+			f = open(dirPath+out1+".txt", "a")
+			f.write(image[image.rfind('/')+7:-4].replace("_", ",") + "_")
+			f.close()
 
 ######################################################################################
-def getImage(imgPath):
-	img = Image.open(imgPath).resize((165, 165), Image.ANTIALIAS)
-	img = ImageTk.PhotoImage(img)
-	return img
-######################################################################################
-def updateLsbox():
+def updateLsbox(lsbox):
+	'''
+	When this is called, it means that the dictionary IMAGES_DICT had been changed.
+	This is to update the Listbox widget.
+	'''
 
 	if (application_path == ""):
 		toWalk = "./"
@@ -137,16 +151,32 @@ def updateLsbox():
 
 ######################################################################################
 
-def browse():
+def browse(uploadPathVar):
+	'''
+	file dialog is opened when browse button is clicked starting from the user's home path.
+	can only select jpeg, gif and png images.
+	When an image is selected, uploadPathVar Entry variable is populated by the image path.
+	'''
 	source = askopenfilename(initialdir = "/", title = "Select file",
 								filetypes = (("jpeg files","*.jpg"),
 												("GIF files","*.gif"),
 												("PNG files","*.png")))
 	uploadPathVar.set(source)
 
-
 ######################################################################################
-def upload():
+def upload(lsbox,uploadPathEntry,uploadNameEntry):
+	'''
+	Uploads the image selected from the users' system.
+	Called when upload button is clicked.
+	Creates a new directory to copy the mage into.
+	startPredicting() is called to populate this new directory with
+	9 slices of the image and text files of class predictions of the further 900 slices.
+
+	Params:
+	lsbox = Listbox widget to update it.
+	uploadPathEntry = Entry widget to be populated by the path of the opened image by the file dialog.
+	uploadNameEntry = Entry widget to update the images dictionary with name of the image user eneters.
+	'''
 
 	uploadPathEntryText = uploadPathEntry.get()
 	uploadNameEntryText = uploadNameEntry.get()
@@ -174,12 +204,23 @@ def upload():
 	subprocess.call(["mv", beforePathName, afterPathName+".jpg"])
 
 	afterPathName = afterPathName+".jpg"
-	main(afterPathName)
+	startPredicting(afterPathName)
 
-	updateLsbox()
+	updateLsbox(lsbox)
 
 ######################################################################################
-def view():
+def view(lsbox,selectedLab):
+	'''
+	Lets the player preview the selected highlighted image name.
+	Image name is located in one of the list on the left hand side of the launcher.
+	The list is rendered by the variable lsbox (Listbox widget).
+	Image is previewed on the right hand side of the launcher.
+	Image is rendered by the variable selectedLab (Label widget).
+
+	Params:
+	Listbox widget to get the selected highlighted image.
+	Label widget where the image is rendered.
+	'''
 	selection = lsbox.curselection()
 	if (len(selection) == 0):
 		popup("No item selected.")
@@ -187,13 +228,22 @@ def view():
 	imgNameSelected = lsbox.get(selection[0])
 	imgActivePath = IMAGES_DICT[imgNameSelected][0]
 
-	img = getImage(imgActivePath+"orig.jpg")
+	img = Image.open(imgActivePath+"orig.jpg").resize((165, 165), Image.ANTIALIAS)
+	img = ImageTk.PhotoImage(img)
+
+	# img = getImage(imgActivePath+"orig.jpg")
 	myvar = Label(selectedLab, image = img)
 	myvar.image = img
 	myvar.grid(row=0, column=0)
 ######################################################################################
-def delete():
-
+def delete(lsbox):
+	'''
+	deletes the image from the IMAGES_DICT.
+	Also deletes the contents in the path of the selected image.
+	Can only delete the images the user had uploaded.
+	Cannot delete default images. i.e. owner=creator
+	Param Listbox widget to get the selected highlighted image and update it.
+	'''
 	selection = lsbox.curselection()
 
 	if (len(selection) == 0):
@@ -210,12 +260,17 @@ def delete():
 
 	subprocess.call(["rm","-r",imgSelectedPath])
 
-	updateLsbox()
+	updateLsbox(lsbox)
 
 ######################################################################################
 
-def select():
-
+def select(lsbox,root):
+	'''
+	The game launches when the player clicks the select button.
+	As long as there is a selected highlighted image.
+	The launcher then closes.
+	Param Listbox widget to get the selected highlighted image.
+	'''
 	selection = lsbox.curselection()
 
 	if (len(selection) == 0):
@@ -229,9 +284,19 @@ def select():
 	file.write(imgSelectedPath)
 	file.close()
 
-	launchGame()
+	gamePath = os.path.join(application_path, "GameMac.app")
+	subprocess.call(["open", gamePath])
+	root.destroy()
 ######################################################################################
-def rename():
+def rename(lsbox,renameEntry):
+	'''
+	Will rename selected image name on the left hand side of the launcher.
+	Can only rename images user have uploaded. Cannot rename default images.
+
+	params:
+	lsbox = Listbox widget to get the highlighted selected image and update it.
+	renameEntry = Entry widget containing the text to rename the image to.
+	'''
 
 	selection = lsbox.curselection()
 	renameEntryText = renameEntry.get()
@@ -261,81 +326,91 @@ def rename():
 	afterPath = imgSelectedPath[:imgSelectedPath.rfind('_')+1]+renameEntryText
 
 	subprocess.call(["mv", beforePath, afterPath])
-	updateLsbox()
+	updateLsbox(lsbox)
 ######################################################################################
 def popup(msg):
+	'''
+	Pop up will be rendered when an action cannot be done.
+	Parameter is the message that will be displayed.
+	'''
 	messagebox.showinfo("Alert", msg)
 
 ######################################################################################
 
-root = Tk()
+def main(): #run mianloop
+	'''
+	Will display the launcher and will continue displaying until the user closes it.
+	'''
 
-root.title("Whack-A-Mine")
-root.resizable(False,False)
+	root = Tk()
 
-
-heading = Label(root, text="Whack-A-Mine\n(Select image to play)", font = "Futura 24 bold")
-heading.grid(row=0, columnspan=3, sticky="we")
-heading.configure(background='pale green')
-
-frameUpload = Frame(root)
-frameUpload.grid(row=1, columnspan=3, sticky="nsew")
-frameUpload.grid_rowconfigure(0, weight=1)
-frameUpload.grid_columnconfigure(0, weight=1)
+	root.title("Whack-A-Mine")
+	root.resizable(False,False)
 
 
-uploadLabel = Label(frameUpload, text="Upload your own image", font=FONTLABEL).grid(row=0, columnspan=3, sticky=NSEW)
-uploadNameLabel = Label(frameUpload, text="Name", font=FONTLABEL).grid(row=1, column=0)
-uploadPathLabel = Label(frameUpload, text="Path", font=FONTLABEL).grid(row=2, column=0)
+	heading = Label(root, text="Whack-A-Mine\n(Select image to play)", font = "Futura 24 bold")
+	heading.grid(row=0, columnspan=3, sticky="we")
+	heading.configure(background='#ECECEC')
+
+	frameUpload = Frame(root)
+	frameUpload.grid(row=1, columnspan=3, sticky="nsew")
+	frameUpload.grid_rowconfigure(0, weight=1)
+	frameUpload.grid_columnconfigure(0, weight=1)
 
 
-uploadNameEntry = Entry(frameUpload, width=50, relief=RIDGE)
-uploadPathVar = StringVar()
-uploadPathEntry = Entry(frameUpload, textvariable=uploadPathVar, width=50, relief=RIDGE)
-
-browseBtn = Button(frameUpload, text="Browse", command=browse, font=FONTBTN, cursor=CURSORBTN, bg="green")
-uploadBtn = Button(frameUpload, text="Upload", command=upload, font=FONTBTN, cursor=CURSORBTN)
-
-uploadNameEntry.grid(row=1, column=1, sticky=W)
-uploadPathEntry.grid(row=2, column=1, sticky=W)
-
-browseBtn.grid(row=2, column=2, sticky=E)
-uploadBtn.grid(row=3, columnspan=3, sticky=NSEW)
+	uploadLabel = Label(frameUpload, text="Upload your own image").grid(row=0, columnspan=3, sticky=NSEW)
+	uploadNameLabel = Label(frameUpload, text="Name").grid(row=1, column=0)
+	uploadPathLabel = Label(frameUpload, text="Path").grid(row=2, column=0)
 
 
-frameList = Frame(root)
-frameList.grid(row=2, column=0)
+	uploadNameEntry = Entry(frameUpload, width=50, relief=RIDGE)
+	uploadPathVar = StringVar()
+	uploadPathEntry = Entry(frameUpload, textvariable=uploadPathVar, width=50, relief=RIDGE)
 
-lsbox = Listbox(frameList)#, width=25, height=25)
-scrollbar = Scrollbar(frameList, orient="vertical")
-lsbox.config(background='pale green')
-scrollbar.config(command=lsbox.yview)
-lsbox.config(yscrollcommand=scrollbar.set)
-scrollbar.pack(side="right", fill="y")
-lsbox.pack(side="left", fill="y")
-lsbox.selection_set(first=0)
+	browseBtn = Button(frameUpload, text="Browse", command=lambda:browse(uploadPathVar), cursor=CURSORBTN, bg="green")
+	uploadBtn = Button(frameUpload, text="Upload", command=lambda:upload(lsbox,uploadPathEntry,uploadNameEntry), cursor=CURSORBTN)
 
+	uploadNameEntry.grid(row=1, column=1, sticky=W)
+	uploadPathEntry.grid(row=2, column=1, sticky=W)
 
-frameBtns = Frame(root)
-frameBtns.grid(row=2, column=1)
-
-viewBtn = Button(frameBtns, text="View", command=view, font=FONTBTN, cursor=CURSORBTN).pack()
-selectBtn = Button(frameBtns, text="Select", command=select, font=FONTBTN, cursor=CURSORBTN).pack()
-deleteBtn = Button(frameBtns, text="Delete", command=delete, font=FONTBTN, cursor=CURSORBTN).pack()
-
-renameLabel = Label(frameBtns, text="Rename:", font=FONTLABEL)
-renameEntry = Entry(frameBtns, relief=RIDGE)
-renameBtn = Button(frameBtns, text="Rename", command=rename, font=FONTBTN, cursor=CURSORBTN)
-renameLabel.pack()
-renameEntry.pack()
-renameBtn.pack()
-
-selectedLab = Label(root, width=20, height=10, text="Select image to view here")
-selectedLab.grid(row=2, column=2)
-selectedLab.configure(background='pale green')
-
-updateLsbox()
+	browseBtn.grid(row=2, column=2, sticky=E)
+	uploadBtn.grid(row=3, columnspan=3, sticky=NSEW)
 
 
-root.mainloop()
+	frameList = Frame(root)
+	frameList.grid(row=2, column=0)
 
+	lsbox = Listbox(frameList)#, width=25, height=25)
+	scrollbar = Scrollbar(frameList, orient="vertical")
+	lsbox.config(background='#ECECEC')
+	scrollbar.config(command=lsbox.yview)
+	lsbox.config(yscrollcommand=scrollbar.set)
+	scrollbar.pack(side="right", fill="y")
+	lsbox.pack(side="left", fill="y")
+	lsbox.selection_set(first=0)
+
+	selectedLab = Label(root, width=20, height=10, text="Select image to view here")
+	selectedLab.grid(row=2, column=2)
+	selectedLab.configure(background='#ECECEC')
+
+
+	frameBtns = Frame(root)
+	frameBtns.grid(row=2, column=1)
+
+	viewBtn = Button(frameBtns, text="View", command=lambda:view(lsbox,selectedLab), cursor=CURSORBTN).pack()
+	selectBtn = Button(frameBtns, text="Select", command=lambda:select(lsbox,root), cursor=CURSORBTN).pack()
+	deleteBtn = Button(frameBtns, text="Delete", command=lambda:delete(lsbox), cursor=CURSORBTN).pack()
+
+	renameLabel = Label(frameBtns, text="Rename:")
+	renameEntry = Entry(frameBtns, relief=RIDGE)
+	renameBtn = Button(frameBtns, text="Rename", command=lambda:rename(lsbox,renameEntry), cursor=CURSORBTN)
+	renameLabel.pack()
+	renameEntry.pack()
+	renameBtn.pack()
+
+	updateLsbox(lsbox)
+
+	root.mainloop()
+
+if __name__ == '__main__':
+    main()
